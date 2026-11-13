@@ -1,0 +1,38 @@
+name: collect-market-data
+# Runs the Macro Futures Desk engine in the cloud after the US futures close and commits the results to data/.
+# 22:25 and 22:55 UTC = 5:25 / 5:55 PM ET in winter, 6:25 / 6:55 PM ET in summer (Sun-Fri).
+on:
+  schedule:
+    - cron: "25 22 * * 0-5"
+    - cron: "55 22 * * 0-5"
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ["engine/**", "runner/**", ".github/workflows/**"]
+permissions:
+  contents: write
+concurrency:
+  group: collect
+  cancel-in-progress: false
+jobs:
+  collect:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install runner
+        run: npm install --prefix runner --no-audit --no-fund
+      - name: Run engine
+        run: node runner/run_node.mjs --engine engine/mfd_engine.min.js --outdir data
+        continue-on-error: true
+      - name: Commit data
+        run: |
+          git config user.name "macro-desk-bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data
+          git diff --cached --quiet && exit 0
+          git commit -m "data $(date -u +%Y-%m-%dT%H:%MZ)"
+          for i in 1 2 3; do git pull --rebase --quiet && git push && break; sleep 5; done
