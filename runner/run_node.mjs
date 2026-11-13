@@ -122,7 +122,7 @@ try {
   const ctx = vm.createContext({ WebSocket: useTV ? TVSocket : PublicSocket, fetch: useTV ? tvFetch : (u, i) => fetchT(u, i), console, setTimeout, clearTimeout, Date, Math, JSON, Promise, Array, Object, Set, Map, String, Number, isNaN, isFinite, parseFloat, Float32Array, Float64Array, URL });
   vm.runInContext(fs.readFileSync(enginePath, "utf8") + "\n;globalThis.MFD = MFD;", ctx);
   const t0 = Date.now();
-  const o = await ctx.MFD.run({ equity, riskPct, conc: useTV ? 6 : 4 });
+  const o = await ctx.MFD.run({ equity, riskPct, conc: 3 });
   log("engine done in", Math.round((Date.now() - t0) / 1000), "s; markets", o.meta.markets);
   status.engine = o.meta.engine; status.markets = o.meta.markets; status.errors = (o.meta.errors || []).slice(0, 80);
   if (o.meta.markets < 20) throw new Error("only " + o.meta.markets + " markets loaded");
