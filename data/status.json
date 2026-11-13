@@ -1,1 +1,1 @@
-{"generated_utc":"2026-11-13T05:57:21.089Z","ok":true,"source":"tradingview","tv_probe":"ok","engine":"2.0.0","markets":33,"errors":["FRED:T10YIE:ws_error","CBOE:VIX3M:ws_error","ECONOMICS:USINTR:ws_error","ECONOMICS:USUR:ws_error","TVC:JP10Y:ws_error"],"asof":"2026-11-12","best":"Bitcoin (CME) SHORT"}
+{"generated_utc":"2026-11-13T06:01:22.805Z","ok":true,"source":"tradingview","tv_probe":"ok","engine":"2.0.0","markets":33,"errors":[],"asof":"2026-11-13","best":"Bitcoin (CME) SHORT"}
