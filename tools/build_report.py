@@ -2,7 +2,7 @@
 """Build the nightly report skeleton (data.json) from the cloud collector's output.
 
   python3 build_report.py --latest latest.json --desk desk.json --status status.json \
-      --record record.json --config config.json [--pick N] --out data.json
+      --record record.json --config config.json [--prices prices.json] [--pick N] --out data.json
 
 Fills every number deterministically: best prediction (candidate N, default 1), runners-up, forecast board,
 validation, track record, regime monitor, tiles, scanner, curves, events, watchlist and headlines.
@@ -18,7 +18,7 @@ except Exception:
     NOW = datetime.utcnow() - timedelta(hours=5)
 
 ap = argparse.ArgumentParser()
-for k in ("latest", "desk", "status", "record", "config", "out"):
+for k in ("latest", "desk", "status", "record", "config", "prices", "out"):
     ap.add_argument("--" + k)
 ap.add_argument("--pick", type=int, default=1)
 a = ap.parse_args()
@@ -26,6 +26,10 @@ J = lambda p, d=None: json.load(open(p, encoding="utf-8")) if p else (d if d is 
 L, DS, ST = J(a.latest), J(a.desk), J(a.status, {})
 REC = J(a.record, {}) if a.record else {}
 CFG = J(a.config, {}) if a.config else {}
+try:
+    PR = (J(a.prices, {}) if a.prices else {}).get("prices", {})
+except Exception:
+    PR = {}
 
 asof = L.get("asof") or ""
 nxt = date.fromisoformat(asof) + timedelta(days=1) if asof else date.today()
@@ -120,7 +124,8 @@ if pick:
     h, m, off = OPEN.get(root, (18, 0, -1))
     open_dt = datetime.combine(nxt + timedelta(days=off), time(h, m))
     if off < 0 and nxt.weekday() == 0:
-        open_dt = datetime.combine(nxt - timedelta(days=1), time(h, m))  # Monday's session opens Sunday evening
+        # Monday's session opens Sunday evening; crypto futures trade through the weekend, so theirs opens Friday evening
+        open_dt = datetime.combine(nxt - timedelta(days=3 if root in ("BTC", "ETH") else 1), time(h, m))
     t12 = open_dt.strftime("%I:%M %p").lstrip("0")
     verb = "Buy" if long_ else "Sell"
     if NOW >= open_dt:
@@ -145,6 +150,14 @@ if pick:
         "contract_override": "",  # Claude: put the next contract symbol here (e.g. MBTZ2026) if the front one expires or hits first notice before exit_date
         "note": "" if sizeable else "One contract risks more than the per-trade budget, so this one is paper-only: track it, do not size it.",
     }
+
+# weekend trading (crypto futures trade through the weekend): say where the price is against the entry window
+wk = (PR.get(pick["sym"]) or {}).get("weekend") if pick else None
+if wk and trade.get("entry_lo") is not None:
+    last = wk[4]
+    where = "inside the entry window" if trade["entry_lo"] <= last <= trade["entry_hi"] else (("below" if last < trade["entry_lo"] else "above") + " the entry window: no entry unless the price comes back inside it")
+    trade["weekend_last"] = last
+    trade["entry_rule"] += f" Weekend trading when the data was collected: last {num(last)} (range {num(wk[3])} to {num(wk[2])}), {where}."
 
 alts = [{"name": b["name"], "dir": b["dir"], "prob": prob_of(b), "grade": b.get("grade"), "basis": b.get("basis")} for b in best if not pick or b["sym"] != pick["sym"]][:3]
 

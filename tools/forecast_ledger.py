@@ -9,7 +9,8 @@ STATE.json is {"rows": [...]} (the dashboard doc state/forecasts). PRICES.json i
 collector: {"prices": {sym: {"bars": [[date, o, h, l, c], ...]}}}.
 
 A row: {id, date (signal session), sym, name, dir LONG|SHORT, ref (close), atr, stop, target (or null), hold,
-prob (model %), grade, kind, basis}. Scoring: enter at the next session's open, stop first if a bar touches both,
+prob (model %), grade, kind, basis}. Scoring: enter at the next session's open (no trade, status SKIPPED, when that
+open is more than half an ATR from the signal close: the plan's entry window), stop first if a bar touches both,
 target if set, otherwise exit at the close of session `hold`. R = move / (entry-to-stop distance), minus 0.02R costs.
 "Direction right" = close after `hold` sessions vs the signal close, in the called direction.
 """
@@ -73,6 +74,8 @@ def score_row(r, bars):
     d = 1 if r["dir"] == "LONG" else -1
     entry = bars[i + 1][1]
     stop = float(r["stop"])
+    if r.get("ref") is not None and r.get("atr") and abs(entry - float(r["ref"])) > 0.5 * float(r["atr"]):
+        return {"status": "SKIPPED", "entry_open": round(entry, 6), "note": "open outside the entry window: no trade"}
     risk = abs(entry - stop) or float(r.get("atr") or 1)
     tgt = r.get("target")
     tgt = float(tgt) if tgt not in (None, "") else None
@@ -109,7 +112,7 @@ def score_row(r, bars):
 def score(d, prices):
     P = prices.get("prices", prices)
     for r in d["rows"]:
-        if r.get("status") == "CLOSED" and "dir_right" in r:
+        if (r.get("status") == "CLOSED" and "dir_right" in r) or r.get("status") == "SKIPPED":
             continue
         p = P.get(r["sym"])
         if not p:
@@ -127,7 +130,8 @@ def stats(d):
     for r in sorted(closed, key=lambda x: x.get("exit_date") or ""):
         s += r["R"]; curve.append(round(s, 2))
     return {
-        "calls": len(rows), "closed": len(closed), "open": len(rows) - len(closed),
+        "calls": len(rows), "closed": len(closed), "skipped": sum(1 for r in rows if r.get("status") == "SKIPPED"),
+        "open": sum(1 for r in rows if r.get("status") not in ("CLOSED", "SKIPPED")),
         "win_pct": round(100 * sum(1 for x in Rs if x > 0) / len(Rs), 1) if Rs else None,
         "avgR": round(sum(Rs) / len(Rs), 2) if Rs else None, "sumR": round(sum(Rs), 2) if Rs else 0,
         "dir_right_pct": round(100 * sum(1 for r in judged if r["dir_right"]) / len(judged), 1) if judged else None,
