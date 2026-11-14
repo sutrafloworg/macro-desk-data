@@ -128,7 +128,9 @@ if pick:
         open_dt = datetime.combine(nxt - timedelta(days=3 if root in ("BTC", "ETH") else 1), time(h, m))
     t12 = open_dt.strftime("%I:%M %p").lstrip("0")
     verb = "Buy" if long_ else "Sell"
-    if NOW >= open_dt:
+    if NOW >= open_dt and root in ("BTC", "ETH"):
+        when = f"{verb} at market when you read this. {pick['name'].split(' (')[0]} futures trade through the weekend; this entry counts toward the {nxt.strftime('%A')} session."
+    elif NOW >= open_dt:
         when = f"{verb} at market when you read this. The {nxt.strftime('%A')} session opened {dlabel(open_dt.date())}, {t12} ET."
     else:
         when = f"{verb} at market at the open: {dlabel(open_dt.date())}, {t12} ET."
