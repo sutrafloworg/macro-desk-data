@@ -1,10 +1,12 @@
 name: collect-market-data
 # Runs the Macro Futures Desk engine in the cloud after the US futures close and commits the results to data/.
-# 22:25 and 22:55 UTC = 5:25 / 5:55 PM ET in winter, 6:25 / 6:55 PM ET in summer (Sun-Fri).
+# Several start times after the 5 PM ET futures close (GitHub often starts scheduled jobs late or drops them),
+# from 22:07 UTC to 00:37 UTC. A run is skipped when good data less than 100 minutes old already exists.
 on:
   schedule:
-    - cron: "25 22 * * 0-5"
-    - cron: "55 22 * * 0-5"
+    - cron: "7,22,37,52 22 * * 0-5"
+    - cron: "7,22,37,52 23 * * 0-5"
+    - cron: "7,37 0 * * 1-6"
   workflow_dispatch:
   push:
     branches: [main]
@@ -20,15 +22,33 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
+      - name: Skip if fresh data already exists
+        id: fresh
+        if: github.event_name == 'schedule'
+        run: |
+          python3 - <<'EOF' >> "$GITHUB_OUTPUT"
+          import json, datetime
+          try:
+              s = json.load(open("data/status.json"))
+              t = datetime.datetime.fromisoformat(s["generated_utc"].replace("Z", "+00:00"))
+              age = (datetime.datetime.now(datetime.timezone.utc) - t).total_seconds() / 60
+              print("skip=" + ("true" if s.get("ok") and age < 100 else "false"))
+          except Exception:
+              print("skip=false")
+          EOF
       - uses: actions/setup-node@v4
+        if: steps.fresh.outputs.skip != 'true'
         with:
           node-version: "20"
       - name: Install runner
+        if: steps.fresh.outputs.skip != 'true'
         run: npm install --prefix runner --no-audit --no-fund
       - name: Run engine
+        if: steps.fresh.outputs.skip != 'true'
         run: node runner/run_node.mjs --engine engine/mfd_engine.min.js --outdir data
         continue-on-error: true
       - name: Commit data
+        if: steps.fresh.outputs.skip != 'true'
         run: |
           git config user.name "macro-desk-bot"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
