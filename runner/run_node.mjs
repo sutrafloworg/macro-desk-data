@@ -132,7 +132,15 @@ try {
   for (const r of o.table) {
     const b = await ctx.MFD.getBars(r.sym, 170, true); if (!b || !b.bars) continue;
     const rows = b.bars.filter((x) => x && x[4] != null).map((x) => [new Date((new Date(x[0] * 1000).getUTCHours() >= 16 ? x[0] + 43200 : x[0]) * 1000).toISOString().slice(0, 10), ...[1, 2, 3, 4].map((k) => +(+x[k]).toPrecision(7))]);
-    prices[r.sym] = { name: r.name, front: r.front, atr: r.atr, bars: rows.slice(-160) };
+    // weekend sessions (24/7 crypto futures) count toward the next weekday's bar; a trailing one is still in progress
+    const merged = [];
+    for (let i = 0; i < rows.length; i++) {
+      const g = new Date(rows[i][0] + "T12:00:00Z").getUTCDay();
+      if (g !== 0 && g !== 6) { merged.push(rows[i]); continue; }
+      if (i + 1 < rows.length) { const y = rows[i + 1].slice(); y[1] = rows[i][1]; y[2] = Math.max(y[2], rows[i][2]); y[3] = Math.min(y[3], rows[i][3]); rows[i + 1] = y; }
+      else merged.weekend = rows[i];
+    }
+    prices[r.sym] = { name: r.name, front: r.front, atr: r.atr, bars: merged.slice(-160), ...(merged.weekend ? { weekend: merged.weekend } : {}) };
   }
   const asof = o.forecast && o.forecast.asof || (o.table[0] && o.table[0].asof);
   const lean = { meta: o.meta, source: status.source, asof, best: o.best, forecast: o.forecast, signals: o.signals, watch: o.watch, macro: o.macro, regime: o.regime, curves: o.curves, calendar: o.calendar, news: o.news, setupBook: o.setupBook };
