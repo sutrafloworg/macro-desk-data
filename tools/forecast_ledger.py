@@ -41,9 +41,13 @@ def add(d, rows):
     for r in rows:
         dup = [x for x in d["rows"] if x.get("date") == r.get("date") and x.get("sym") == r.get("sym") and x.get("dir") == r.get("dir")]
         if dup:
+            if dup[0].get("entry") is None:  # not entered yet: a later run of the same night may refresh the levels
+                dup[0].update({k: v for k, v in r.items() if k not in ("id", "status")})
             out.append(dup[0]["id"])
             continue
-        n += 1
+        if r.get("session"):  # one call per session: a newer call replaces an earlier one that has not been entered
+            d["rows"] = [x for x in d["rows"] if not (x.get("session") == r["session"] and x.get("entry") is None)]
+        n = max([int(str(x.get("id", "F0"))[1:] or 0) for x in d["rows"] if str(x.get("id", "")).startswith("F") and str(x.get("id"))[1:].isdigit()] + [0]) + 1
         r = dict(r)
         r["id"] = r.get("id") or "F%03d" % n
         r["status"] = "OPEN"

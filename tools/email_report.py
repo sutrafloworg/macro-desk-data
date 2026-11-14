@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
-"""Render the nightly Macro Futures Desk email from the report JSON.
+"""Render the nightly Macro Futures Desk email (v3) from the report JSON.
 
   python3 email_report.py DATA.json OUT_DIR [--dashboard URL]
 
 Writes OUT_DIR/subject.txt, OUT_DIR/email.html and OUT_DIR/email.txt.
-The layout is fixed here so every email looks the same; the run only supplies data.
+
+Layout rules (learned the hard way): Gmail strips every background colour from this email, so nothing here
+depends on one. All text is dark or strongly coloured on white, labels are outlined not filled, and every
+block is a simple label / value row that reads the same on a phone and a laptop. The exact trade comes first.
 """
 import html, json, os, sys
 
@@ -22,6 +25,24 @@ if "data" in D and "verdict" not in D:
 os.makedirs(out_dir, exist_ok=True)
 
 e = lambda s: html.escape("" if s is None else str(s))
+V = D.get("verdict") or {}
+BP = D.get("best_prediction") or {}
+TR = D.get("trade") or {}
+ALT = D.get("alternatives") or []
+REC = D.get("forecast_record") or {}
+VAL = D.get("forecast_validation") or {}
+MT = D.get("macro_trend") or {}
+RG = D.get("regime") or {}
+E = D.get("events") or []
+N = D.get("news") or []
+mode = str(D.get("run_mode") or "").upper()
+eng = D.get("engine") or {}
+session = (D.get("session_label") or "").split(" (")[0].replace("Report for the ", "").replace(" session", "")
+
+INK, INK2, MUTED, RULE = "#12202B", "#34454F", "#5E6E7B", "#D3DAE1"
+LONG, SHORT, WARN, ACC = "#0B7A5A", "#B2372F", "#9A5B00", "#2952B8"
+F = "font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif"
+M = "font-family:Consolas,'SFMono-Regular',Menlo,'Liberation Mono',monospace"
 
 
 def clip(s, n):
@@ -29,10 +50,10 @@ def clip(s, n):
     return s if len(s) <= n else s[: n - 1].rsplit(" ", 1)[0] + "…"
 
 
-def first_sentences(s, n=2, limit=320):
-    s = "" if s is None else str(s).strip()
-    parts, out = s.replace("\n", " ").split(". "), []
-    for p in parts:
+def sentences(s, n=2, limit=320):
+    s = "" if s is None else str(s).strip().replace("\n", " ")
+    out = []
+    for p in s.split(". "):
         out.append(p.rstrip("."))
         if len(out) >= n:
             break
@@ -40,262 +61,211 @@ def first_sentences(s, n=2, limit=320):
     return clip(txt + ("." if txt and not txt.endswith((".", "!", "?")) else ""), limit)
 
 
-V = D.get("verdict") or {}
-stance = str(V.get("stance") or "STAND ASIDE").upper()
-headline = V.get("headline") or ""
-T = D.get("trades") or []
-MT = D.get("macro_trend") or {}
-W = D.get("watch") or []
-P = D.get("positions") or []
-E = D.get("events") or []
-N = D.get("news") or []
-mode = D.get("run_mode") or ""
-eng = D.get("engine") or {}
-session = (D.get("session_label") or "").split(" (")[0]
-BP = D.get("best_prediction") or {}
-ALT = D.get("alternatives") or []
-REC = D.get("forecast_record") or {}
-VAL = D.get("forecast_validation") or {}
-
-C = {"ink": "#12202B", "ink2": "#34454F", "muted": "#5E6E7B", "rule": "#E4E9EE", "bg": "#EDF0F3", "card": "#FFFFFF",
-     "long": "#0B7A5A", "longbg": "#DDF2EA", "short": "#B2372F", "shortbg": "#F8E1DE", "warn": "#A8690C", "warnbg": "#FBEFD9",
-     "acc": "#2952B8", "accbg": "#E3EAFA", "flat": "#6A7885", "flatbg": "#E8ECEF"}
-stance_col = C["long"] if stance.startswith("TRADE") else C["warn"] if stance.startswith("WATCH") else C["flat"]
-FONT = "font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif"
-MONO = "font-family:SFMono-Regular,Consolas,'Liberation Mono',Menlo,monospace"
+def num(x):
+    if x is None or x == "":
+        return "-"
+    if isinstance(x, (int, float)):
+        s = f"{x:,.0f}" if abs(x) >= 1000 else f"{x:,}"
+        return s[:-2] if s.endswith(".0") else s
+    return str(x)
 
 
-def chip(text, fg, bg):
-    return f'<span style="display:inline-block;padding:3px 8px;border-radius:4px;background:{bg};color:{fg};font:700 11px/1.2 Arial,sans-serif;letter-spacing:.06em;text-transform:uppercase">{e(text)}</span>'
+def money(x):
+    return "-" if x in (None, "") else "$" + f"{x:,.0f}"
 
 
-def side_chip(d):
-    d = str(d or "").upper()
-    return chip(d or "-", C["long"] if d == "LONG" else C["short"] if d == "SHORT" else C["flat"],
-                C["longbg"] if d == "LONG" else C["shortbg"] if d == "SHORT" else C["flatbg"])
+def real(s):
+    return s and str(s).strip() and str(s).strip().upper() != "TODO"
 
 
-def section(title, inner, sub=""):
-    s = f'<div style="{FONT};font-size:13px;color:{C["muted"]};margin:2px 0 10px">{e(sub)}</div>' if sub else ""
-    return (f'<tr><td style="padding:22px 24px 4px"><div style="{FONT};font-size:12px;font-weight:700;letter-spacing:.1em;'
-            f'text-transform:uppercase;color:{C["ink2"]};border-bottom:2px solid {C["ink"]};padding-bottom:6px;margin-bottom:10px">{e(title)}</div>{s}{inner}</td></tr>')
+def tag(text, col):
+    return f'<span style="{F};font-size:12px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:{col};border:1px solid {col};border-radius:4px;padding:2px 7px">{e(text)}</span>'
 
 
-def table(headers, rows, aligns=None):
-    aligns = aligns or ["left"] * len(headers)
-    th = "".join(f'<th align="{a}" style="{FONT};font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:{C["muted"]};padding:6px 8px;border-bottom:1px solid {C["rule"]}">{e(h)}</th>' for h, a in zip(headers, aligns))
-    trs = ""
-    for r in rows:
-        trs += "<tr>" + "".join(f'<td align="{a}" style="{FONT};font-size:14px;color:{C["ink"]};padding:8px;border-bottom:1px solid {C["rule"]};vertical-align:top">{c}</td>' for c, a in zip(r, aligns)) + "</tr>"
-    return f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse">{"<tr>" + th + "</tr>"}{trs}</table>'
+def h2(title):
+    return f'<div style="{F};font-size:13px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:{INK2};border-bottom:2px solid {INK};padding-bottom:6px;margin:0 0 10px">{e(title)}</div>'
 
 
-# ---------- header ----------
+def block(title, inner):
+    return f'<tr><td style="padding:26px 20px 0">{h2(title)}{inner}</td></tr>'
+
+
+def kv(rows, big=False):
+    """Label / value rows. rows = [(label, value_html, note_text)]."""
+    out = ""
+    for lab, val, note in rows:
+        out += (f'<tr><td width="34%" style="{F};font-size:13px;font-weight:700;letter-spacing:.05em;text-transform:uppercase;color:{MUTED};padding:11px 10px 11px 0;border-top:1px solid {RULE};vertical-align:top">{e(lab)}</td>'
+                f'<td style="{F};font-size:{"17" if big else "15"}px;line-height:1.45;color:{INK};padding:10px 0;border-top:1px solid {RULE};vertical-align:top">{val}'
+                + (f'<div style="{F};font-size:13px;line-height:1.45;color:{MUTED};margin-top:3px">{e(note)}</div>' if note else "") + '</td></tr>')
+    return f'<table width="100%" cellpadding="0" cellspacing="0" style="border-collapse:collapse">{out}</table>'
+
+
+def bullets(items, col=INK2):
+    li = "".join(f'<li style="margin:0 0 6px">{e(x)}</li>' for x in items if real(x))
+    return f'<ul style="{F};font-size:15px;line-height:1.5;color:{col};margin:6px 0 0;padding-left:20px">{li}</ul>' if li else ""
+
+
 parts = []
+# ---------- header ----------
+stale = mode == "DEGRADED"
 parts.append(
-    f'<tr><td style="background:{C["ink"]};padding:18px 24px">'
-    f'<div style="{FONT};font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:#AFC0CC">Claude · Macro Futures Desk</div>'
-    f'<div style="{FONT};font-size:20px;font-weight:700;color:#FFFFFF;margin-top:4px">{e(session or "Nightly report")}</div>'
-    f'</td></tr>')
-parts.append(
-    f'<tr><td style="padding:20px 24px 6px">'
-    f'<table role="presentation" cellpadding="0" cellspacing="0"><tr>'
-    f'<td style="background:{stance_col};color:#fff;{FONT};font-weight:700;font-size:14px;letter-spacing:.1em;padding:8px 12px;border-radius:5px">{e(stance)}</td>'
-    f'<td style="padding-left:12px;{FONT};font-size:12px;color:{C["muted"]}">{e(mode.title())} run · engine {e(eng.get("version", "-"))}</td></tr></table>'
-    f'<div style="{FONT};font-size:18px;line-height:1.35;font-weight:700;color:{C["ink"]};margin-top:12px">{e(headline)}</div>'
-    f'<div style="{FONT};font-size:14px;line-height:1.55;color:{C["ink2"]};margin-top:8px">{e(first_sentences(V.get("summary"), 3, 420))}</div>'
-    f'</td></tr>')
-if mode.upper() == "DEGRADED":
-    parts.append(f'<tr><td style="padding:10px 24px 0"><div style="background:{C["warnbg"]};color:{C["warn"]};{FONT};font-size:13px;padding:10px 12px;border-radius:6px"><b>Degraded run:</b> {e(first_sentences(D.get("data_note"), 1, 220))}</div></td></tr>')
+    f'<tr><td style="padding:20px 20px 0"><div style="{F};font-size:12px;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:{MUTED}">Claude · Macro Futures Desk</div>'
+    f'<div style="{F};font-size:22px;font-weight:700;color:{INK};margin-top:4px">Trade plan for {e(session or "the next session")}</div>'
+    + (f'<div style="{F};font-size:14px;line-height:1.45;color:{WARN};border:1px solid {WARN};border-radius:6px;padding:8px 10px;margin-top:10px"><b>Older data tonight.</b> {e(sentences(D.get("data_note"), 1, 200))} Check the price before acting.</div>' if stale else "")
+    + '</td></tr>')
 
-# ---------- best prediction ----------
-def fmt(x):
-    return "-" if x in (None, "") else str(x)
+# ---------- the trade ----------
+if TR.get("action") and BP.get("name"):
+    is_long = TR["action"].upper().startswith("BUY")
+    col = LONG if is_long else SHORT
+    contract = TR.get("contract_override") if real(TR.get("contract_override")) else TR.get("contract")
+    qty = TR.get("qty")
+    conv = TR.get("conviction") or "Low"
+    conv_col = {"High": LONG, "Medium": ACC}.get(conv, WARN)
+    size_val = (f'<b>{qty} × {e(contract)}</b>' if qty else '<b>Paper only</b>')
+    size_note = (f'{TR.get("product")}. ' if TR.get("product") else "") + (TR.get("note") or "")
+    loss = TR.get("max_loss_usd")
+    risk_val = f'<b style="color:{SHORT}">{money(loss)}</b> if the stop is hit' if loss else "-"
+    risk_note = (f'{TR.get("risk_pct_equity")}% of the account. ' if TR.get("risk_pct_equity") else "") + (f'Gain at the target: about {money(TR.get("gain_at_target_usd"))}.' if TR.get("gain_at_target_usd") else "")
+    stop_pct = TR.get("stop_pct")
+    rows = [
+        ("Entry", f'<b>{e(TR.get("entry_when"))}</b>', TR.get("entry_rule")),
+        ("Stop loss", f'<b style="{M};font-size:18px;color:{SHORT}">{num(TR.get("stop"))}</b>', f'{TR.get("stop_order", "Stop")} order, placed as soon as you are in' + (f' ({"+" if stop_pct > 0 else ""}{stop_pct}% from the last close).' if stop_pct is not None else ".")),
+        ("Exit", (f'<b style="{M};font-size:18px;color:{LONG}">{num(TR.get("target"))}</b> take profit' if TR.get("target") is not None else f'<b>Close on {e(TR.get("exit_label"))}</b>'), TR.get("exit_rule")),
+        ("Size", size_val, size_note.strip()),
+        ("Risk", risk_val, risk_note.strip()),
+        ("Chance it works", f'<b>{num(TR.get("chance"))}%</b> &nbsp;{tag(conv + " conviction", conv_col)}', "Grade " + str(TR.get("grade") or "-") + ". " + ("Wrong almost half the time: keep the size small." if (TR.get("chance") or 0) < 58 else "")),
+    ]
+    why = BP.get("why") if real(BP.get("why")) else V.get("summary")
+    box = (f'<table width="100%" cellpadding="0" cellspacing="0" style="border:3px solid {col};border-radius:10px"><tr><td style="padding:16px 16px 6px">'
+           f'<div style="{F};font-size:12px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:{col}">Tonight\'s trade{" · paper" if TR.get("paper") else ""}</div>'
+           f'<div style="{F};font-size:30px;line-height:1.15;font-weight:800;color:{col};margin-top:6px">{e(TR["action"])}</div>'
+           f'<div style="{F};font-size:24px;line-height:1.2;font-weight:800;color:{INK};margin-top:2px">{e(BP.get("name"))}</div>'
+           f'<div style="{M};font-size:14px;color:{MUTED};margin:6px 0 12px">{e(contract)} · {e(BP.get("basis") or "")}</div>'
+           + kv(rows, big=True)
+           + (f'<div style="{F};font-size:15px;line-height:1.5;color:{INK2};border-top:1px solid {RULE};padding:12px 0 10px"><b style="color:{INK}">Why:</b> {e(sentences(why, 3, 480))}</div>' if real(why) else "")
+           + '</td></tr></table>')
+    parts.append(f'<tr><td style="padding:16px 12px 0">{box}</td></tr>')
 
+    extra = ""
+    if real(BP.get("invalidation")):
+        extra += f'<div style="{F};font-size:15px;line-height:1.5;color:{INK2};margin:0 0 10px"><b style="color:{SHORT}">Get out early if:</b> {e(clip(BP.get("invalidation"), 300))}</div>'
+    drv = bullets((BP.get("drivers") or [])[:4])
+    if drv:
+        extra += f'<div style="{F};font-size:14px;font-weight:700;color:{INK};margin-top:4px">What the model sees</div>{drv}'
+    rk = bullets((BP.get("risks") or [])[:3])
+    if rk:
+        extra += f'<div style="{F};font-size:14px;font-weight:700;color:{INK};margin-top:12px">What could go wrong</div>{rk}'
+    if extra:
+        parts.append(block("Behind the trade", extra))
+elif real(V.get("headline")):
+    parts.append(f'<tr><td style="padding:16px 20px 0"><div style="{F};font-size:18px;font-weight:700;color:{INK}">{e(V.get("headline"))}</div><div style="{F};font-size:15px;line-height:1.5;color:{INK2};margin-top:6px">{e(sentences(V.get("summary"), 3, 420))}</div></td></tr>')
 
-if BP.get("name"):
-    d = str(BP.get("dir", "")).upper()
-    col, bg = (C["long"], C["longbg"]) if d == "LONG" else (C["short"], C["shortbg"])
-    verb = "UP" if d == "LONG" else "DOWN"
-    grade = str(BP.get("grade") or "")
-    gcol = {"A": C["long"], "B": C["acc"]}.get(grade, C["flat"])
-    band = BP.get("band") or []
-    cells = [("Chance it's right", f'{BP.get("prob")}%' if BP.get("prob") is not None else None),
-             ("Expected move", BP.get("exp_move")), ("Horizon", f'{BP.get("hold")} sessions' if BP.get("hold") else None),
-             ("Reference", BP.get("ref")), ("Stop", BP.get("stop")), ("Target", BP.get("target") or "time exit"),
-             ("Likely range (80%)", f'{band[0]} – {band[1]}' if len(band) == 2 else None), ("Size (paper)", BP.get("size")), ("Risk at stop", BP.get("risk_usd"))]
-    grid = ""
-    for i, (k, v) in enumerate(cells):
-        grid += (f'<td width="33%" style="padding:8px 10px;border-top:1px solid {C["rule"]};vertical-align:top"><div style="{FONT};font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:{C["muted"]}">{k}</div>'
-                 f'<div style="{MONO};font-size:14px;font-weight:700;color:{C["ink"]};margin-top:2px">{e(fmt(v))}</div></td>') + ("</tr><tr>" if i in (2, 5) else "")
-    drv = "".join(f'<li style="margin:2px 0">{e(x)}</li>' for x in (BP.get("drivers") or [])[:4])
-    rk = "".join(f'<li style="margin:2px 0">{e(x)}</li>' for x in (BP.get("risks") or [])[:3])
-    card = (f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:2px solid {col};border-radius:8px">'
-            f'<tr><td colspan="3" style="padding:12px 14px;background:{bg}">'
-            f'<div style="{FONT};font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:{col};font-weight:700">Best prediction · next {e(BP.get("hold") or 10)} sessions</div>'
-            f'<div style="{FONT};font-size:22px;font-weight:800;color:{C["ink"]};margin-top:4px">{e(BP.get("name"))} {chip(verb, "#fff", col)} {chip("Grade " + grade, "#fff", gcol) if grade else ""}</div>'
-            f'<div style="{MONO};font-size:12px;color:{C["muted"]};margin-top:4px">{e(BP.get("instrument") or "")}{" · " if BP.get("instrument") else ""}{e(BP.get("basis") or "")}</div></td></tr>'
-            f'<tr>{grid}</tr>'
-            f'<tr><td colspan="3" style="padding:10px 14px;border-top:1px solid {C["rule"]};{FONT};font-size:14px;line-height:1.55;color:{C["ink2"]}">{e(first_sentences(BP.get("why"), 3, 460))}'
-            + (f'<div style="margin-top:8px;font-size:13px"><b style="color:{C["ink"]}">Why the model leans this way</b><ul style="margin:4px 0 0;padding-left:18px">{drv}</ul></div>' if drv else "")
-            + (f'<div style="margin-top:8px;font-size:13px"><b style="color:{C["short"]}">What could break it</b><ul style="margin:4px 0 0;padding-left:18px">{rk}</ul></div>' if rk else "")
-            + (f'<div style="margin-top:6px;font-size:13px"><b style="color:{C["short"]}">Wrong if:</b> {e(clip(BP.get("invalidation"), 200))}</div>' if BP.get("invalidation") else "")
-            + (f'<div style="margin-top:8px;font-size:12px;color:{C["muted"]}">{e(clip(BP.get("history"), 260))}</div>' if BP.get("history") else "")
-            + '</td></tr></table>')
-    if ALT:
-        rows = [[f'<b>{e(a.get("name"))}</b>', side_chip(a.get("dir")), f'<span style="{MONO}">{e(fmt(a.get("prob")))}%</span>', f'<span style="font-size:12px;color:{C["muted"]}">{e(clip(a.get("basis"), 60))}</span>'] for a in ALT[:3]]
-        card += f'<div style="{FONT};font-size:12px;font-weight:700;color:{C["ink2"]};margin:14px 0 4px">Runners-up</div>' + table(["Market", "Call", "Chance", "Basis"], rows)
-    sub = "Paper call, scored automatically after the horizon."
-    if VAL.get("topPick"):
-        tp = VAL["topPick"]; tr = VAL.get("tradePlan") or {}
-        sub = (f"Model's daily top pick, tested {VAL.get('span', '')} on data it had not seen: right {tp.get('hit')}% of {tp.get('n')} days"
-               + (f"; as a stop + 10-day exit plan {tr.get('win')}% won, average {'+' if (tr.get('expR') or 0) > 0 else ''}{tr.get('expR')}R." if tr.get("n") else "."))
-    parts.append(section("Today's best prediction", card, sub))
-    if REC.get("calls"):
-        rec = (f'<div style="{FONT};font-size:14px;color:{C["ink2"]}">{REC.get("calls")} calls so far · {REC.get("closed")} closed'
-               + (f' · {REC.get("win_pct")}% won · average {REC.get("avgR")}R · total {REC.get("sumR")}R' if REC.get("closed") else "")
-               + (f' · direction right {REC.get("dir_right_pct")}% of {REC.get("judged")}' if REC.get("judged") else "") + '</div>')
-        rr = [[e(r.get("date")), f'<b>{e(r.get("name"))}</b>', side_chip(r.get("dir")), e(r.get("exit") or r.get("status")),
-               f'<span style="{MONO}">{e(r.get("R") if r.get("R") is not None else r.get("R_now"))}R</span>'] for r in (REC.get("recent") or [])[:5]]
-        parts.append(section("Prediction track record", rec + (table(["Date", "Market", "Call", "Status", "R"], rr, ["left", "left", "left", "left", "right"]) if rr else "")))
+# ---------- runners-up ----------
+if ALT:
+    rows = [(a.get("name"), f'<b style="color:{LONG if a.get("dir") == "LONG" else SHORT}">{"BUY" if a.get("dir") == "LONG" else "SELL SHORT"}</b> &nbsp;{num(a.get("prob"))}% · grade {e(a.get("grade") or "-")}', clip(a.get("basis"), 80)) for a in ALT[:3]]
+    parts.append(block("Next best ideas (not tonight's trade)", kv(rows)))
 
-# ---------- tickets ----------
-if T:
-    cards = ""
-    for t in T:
-        d = str(t.get("dir", "")).upper()
-        verb = "BUY" if d == "LONG" else "SELL"
-        col, bg = (C["long"], C["longbg"]) if d == "LONG" else (C["short"], C["shortbg"])
-        cells = [("Entry", t.get("entry")), ("Stop", t.get("stop")), ("Target 1", t.get("target1")),
-                 ("Size", t.get("size")), ("P(win)", f'{t.get("pwin")}%' if t.get("pwin") is not None else None), ("Conviction", f'{t.get("conviction")}/100' if t.get("conviction") is not None else None)]
-        grid = "".join(
-            f'<td width="33%" style="padding:8px 10px;border-top:1px solid {C["rule"]};vertical-align:top"><div style="{FONT};font-size:10px;letter-spacing:.08em;text-transform:uppercase;color:{C["muted"]}">{k}</div>'
-            f'<div style="{MONO};font-size:14px;font-weight:700;color:{C["ink"]};margin-top:2px">{e(v if v not in (None, "") else "-")}</div></td>'
-            + ("</tr><tr>" if i == 2 else "") for i, (k, v) in enumerate(cells))
-        cards += (f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="border:1px solid {C["rule"]};border-left:4px solid {col};border-radius:6px;margin-bottom:12px">'
-                  f'<tr><td colspan="3" style="padding:10px 12px">{chip(verb, "#fff", col)} <span style="{FONT};font-size:16px;font-weight:700;color:{C["ink"]}">{e(t.get("name"))}</span>'
-                  f'<div style="{MONO};font-size:12px;color:{C["muted"]};margin-top:4px">{e(t.get("instrument"))} · {e(t.get("setup_name"))}</div></td></tr>'
-                  f'<tr>{grid}</tr>'
-                  f'<tr><td colspan="3" style="padding:10px 12px;border-top:1px solid {C["rule"]};{FONT};font-size:13px;line-height:1.5;color:{C["ink2"]}">'
-                  f'{e(first_sentences(t.get("thesis"), 2, 300))}'
-                  + (f'<div style="margin-top:6px"><b style="color:{C["short"]}">Invalidated if:</b> {e(clip(t.get("invalidation"), 200))}</div>' if t.get("invalidation") else "")
-                  + (f'<div style="margin-top:6px;color:{C["muted"]};font-size:12px">{e(clip(t.get("risk_note"), 160))}</div>' if t.get("risk_note") else "")
-                  + '</td></tr></table>')
-    parts.append(section(f"Trade tickets ({len(T)})", cards, "Orders for the next session. PAPER until the ledger proves the edge."))
-else:
-    reason = V.get("no_trade_reason") or ""
-    parts.append(section("Trade tickets", f'<div style="background:{C["flatbg"]};border-radius:6px;padding:12px 14px;{FONT};font-size:14px;color:{C["ink2"]}"><b style="color:{C["ink"]}">No trade today.</b> Nothing cleared the bar (conviction ≥ 65, qscore ≥ 30, positive expectancy).'
-                         + (f'<div style="margin-top:6px;font-size:12px;color:{C["muted"]}">{e(clip(reason, 240))}</div>' if reason else "") + '</div>'))
+# ---------- track record and odds ----------
+rec_rows = []
+if REC.get("calls"):
+    closed = REC.get("closed") or 0
+    rec_rows.append(("Live record", f'<b>{REC.get("calls")}</b> trades logged, <b>{closed}</b> closed' + (f', {REC.get("win_pct")}% won, average {REC.get("avgR")}R' if closed else ""), "R = result as a multiple of the amount risked. Each trade runs about 10 sessions." if not closed else ""))
+    for r in (REC.get("recent") or [])[:4]:
+        res = r.get("R") if r.get("R") is not None else r.get("R_now")
+        rec_rows.append((f'{r.get("date")}', f'{e(r.get("name"))} <b style="color:{LONG if r.get("dir") == "LONG" else SHORT}">{"BUY" if r.get("dir") == "LONG" else "SELL"}</b> &nbsp;{e(r.get("exit") or r.get("status") or "")}' + (f' &nbsp;<b style="{M}">{"+" if res > 0 else ""}{res}R</b>' if isinstance(res, (int, float)) else ""), ""))
+tp, tpl = VAL.get("topPick") or {}, VAL.get("tradePlan") or {}
+if tp.get("n"):
+    rec_rows.append(("History test", f'Right <b>{tp.get("hit")}%</b> of {num(tp.get("n"))} days', f'{VAL.get("span", "")}, on data the model had not seen. As a trade with this stop and exit: {tpl.get("win")}% won, {"+" if (tpl.get("expR") or 0) > 0 else ""}{tpl.get("expR")}R average, worst losing streak {tpl.get("maxLossRun")}.'))
+if rec_rows:
+    parts.append(block("Track record", kv(rec_rows)))
 
 # ---------- regime ----------
 if MT.get("quadrant"):
-    names = [("growth", "Growth"), ("inflation", "Inflation"), ("policy", "Policy"), ("liquidity", "Liquidity"), ("risk", "Risk appetite")]
-    rows = ""
+    names = [("growth", "Growth"), ("inflation", "Inflation"), ("policy", "Fed policy"), ("liquidity", "Liquidity"), ("risk", "Risk appetite")]
+    rows = []
     for k, lab in names:
         p = (MT.get("pillars") or {}).get(k) or {}
         s = p.get("score")
-        v = 0 if s is None else max(-1, min(1, float(s)))
-        w = int(round(abs(v) * 50))
-        left = 50 - w if v < 0 else 50
-        barcol = C["warn"] if v < 0 else C["acc"]
+        if s is None:
+            continue
+        c = LONG if s > 0.2 else SHORT if s < -0.2 else MUTED
         d20 = p.get("d20")
-        d20s = "" if d20 in (None, 0) else f' <span style="color:{C["warn"] if abs(d20) >= .5 else C["muted"]}">({"+" if d20 > 0 else ""}{d20} in 20d)</span>'
-        bar = (f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="height:8px"><tr>'
-               + (f'<td width="{left}%" style="background:{C["rule"]};font-size:0;line-height:0">&nbsp;</td>' if left else "")
-               + (f'<td width="{w}%" style="background:{barcol};font-size:0;line-height:0">&nbsp;</td>' if w else "")
-               + (f'<td style="background:{C["rule"]};font-size:0;line-height:0">&nbsp;</td>' if left + w < 100 else "")
-               + '</tr></table>')
-        rows += (f'<tr><td style="{FONT};font-size:13px;color:{C["ink2"]};padding:8px 0 3px">{lab}</td>'
-                 f'<td align="right" style="{FONT};font-size:13px;color:{C["ink"]};padding:8px 0 3px"><b>{e(p.get("label", "-"))}</b> <span style="{MONO};color:{C["muted"]}">{e(s)}</span>{d20s}</td></tr>'
-                 f'<tr><td colspan="2" style="padding:0 0 4px">{bar}</td></tr>')
-    quad = MT.get("quadrant")
-    qcol = {"Reflation": C["long"], "Goldilocks": C["acc"], "Stagflation": C["warn"], "Deflationary slowdown": C["short"]}.get(quad, C["ink"])
-    alerts = [a for a in (MT.get("alerts") or []) if any(x in a for x in ("Regime shift", "pillar moved", "shock"))][:3]
-    al = "".join(f'<li style="margin:3px 0">{e(a)}</li>' for a in alerts)
-    fav = ", ".join(f'{x["name"]}' for x in (MT.get("favored") or [])[:4])
-    dis = ", ".join(f'{x["name"]}' for x in (MT.get("disfavored") or [])[:4])
-    inner = (f'<div style="{FONT};font-size:22px;font-weight:700;color:{qcol}">{e(quad)} <span style="font-size:13px;color:{C["muted"]};font-weight:400">day {e(MT.get("ageSessions"))} · was {e(MT.get("prior20"))} 20 sessions ago</span></div>'
-             f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin-top:8px">{rows}</table>'
-             + (f'<ul style="{FONT};font-size:13px;color:{C["warn"]};margin:10px 0 0;padding-left:18px">{al}</ul>' if al else "")
-             + (f'<div style="{FONT};font-size:13px;color:{C["ink2"]};margin-top:10px"><b style="color:{C["long"]}">Tends to rise now:</b> {e(fav)}<br><b style="color:{C["short"]}">Tends to fall now:</b> {e(dis)}</div>' if fav else ""))
-    parts.append(section("Macro regime", inner))
+        rows.append((lab, f'<b style="color:{c}">{e(p.get("label", "-"))}</b> &nbsp;<span style="{M};font-size:14px;color:{MUTED}">{"+" if s > 0 else ""}{s}</span>', (f'Moved {"+" if d20 > 0 else ""}{d20} in 20 sessions.' if d20 and abs(d20) >= 0.5 else "")))
+    fav = ", ".join(x["name"] for x in (MT.get("favored") or [])[:4])
+    dis = ", ".join(x["name"] for x in (MT.get("disfavored") or [])[:4])
+    if fav:
+        rows.append(("Tends to rise", e(fav), ""))
+        rows.append(("Tends to fall", e(dis), ""))
+    head = (f'<div style="{F};font-size:20px;font-weight:800;color:{INK}">{e(MT.get("quadrant"))} <span style="font-size:14px;font-weight:400;color:{MUTED}">day {e(MT.get("ageSessions"))}</span></div>'
+            + (f'<div style="{F};font-size:15px;line-height:1.5;color:{INK2};margin:6px 0 8px">{e(sentences(RG.get("narrative"), 2, 320))}</div>' if real(RG.get("narrative")) else '<div style="margin-bottom:8px"></div>'))
+    parts.append(block("Macro backdrop", head + kv(rows)))
 
-# ---------- watchlist ----------
-if W:
-    rows = [[f'<b>{e(w.get("name"))}</b>', side_chip(w.get("dir")), f'<span style="{MONO}">{e(w.get("trigger"))}</span>', f'<span style="{MONO};font-size:12px;color:{C["muted"]}">{e(w.get("base"))}</span>'] for w in W[:6]]
-    parts.append(section("Watchlist", table(["Market", "Side", "Trigger", "Base rate"], rows), "Closest setups to triggering. Base rate = trades · win rate · average R."))
-
-# ---------- positions ----------
-if P:
-    rows = [[f'<b>{e(p.get("name"))}</b><div style="{MONO};font-size:11px;color:{C["muted"]}">{e(p.get("instrument"))}</div>', side_chip(p.get("dir")), e(p.get("status")),
-             f'<span style="{MONO}">{e(p.get("R"))}R</span>'] for p in P]
-    parts.append(section("Open positions", table(["Market", "Side", "Status", "R"], rows, ["left", "left", "left", "right"])))
-else:
-    parts.append(section("Open positions", f'<div style="{FONT};font-size:14px;color:{C["muted"]}">None.</div>'))
-
-# ---------- week ahead ----------
+# ---------- events ----------
 hi = [x for x in E if str(x.get("imp", "")).lower() == "high"] or E
 if hi:
-    rows = [[f'<span style="{MONO};font-size:12px;color:{C["muted"]}">{e(x.get("day"))} {e(x.get("time"))}</span>', e(clip(x.get("what"), 70)),
-             f'<span style="{MONO};font-size:12px;color:{C["muted"]}">{e(x.get("markets"))}</span>'] for x in hi[:6]]
-    parts.append(section("Key events", table(["When (ET)", "Event", "Moves"], rows)))
+    rows = [(f'{x.get("day", "")} {x.get("time", "")}'.strip(), e(clip(x.get("what"), 90)), "") for x in hi[:6]]
+    parts.append(block("Events to watch (ET)", kv(rows)))
 
 # ---------- news ----------
-if N:
+news = [n for n in N if real(n.get("title"))][:4]
+if news:
     items = "".join(
-        f'<li style="margin:0 0 8px">' + (f'<a href="{e(n.get("url"))}" style="color:{C["acc"]};text-decoration:none">{e(n.get("title"))}</a>' if n.get("url") else e(n.get("title")))
-        + (f'<div style="color:{C["muted"]};font-size:12px;margin-top:2px">{e(clip(n.get("take"), 160))}</div>' if n.get("take") else "") + '</li>'
-        for n in N[:4])
-    parts.append(section("What moved markets", f'<ul style="{FONT};font-size:14px;line-height:1.4;margin:0;padding-left:18px;color:{C["ink"]}">{items}</ul>'))
+        '<li style="margin:0 0 10px">' + (f'<a href="{e(n.get("url"))}" style="color:{ACC}">{e(n.get("title"))}</a>' if n.get("url") else e(n.get("title")))
+        + (f'<div style="font-size:14px;color:{MUTED};margin-top:2px">{e(clip(n.get("take"), 170))}</div>' if real(n.get("take")) else "") + '</li>' for n in news)
+    parts.append(block("What moved markets", f'<ul style="{F};font-size:15px;line-height:1.45;margin:0;padding-left:20px;color:{INK}">{items}</ul>'))
 
 # ---------- footer ----------
 parts.append(
-    f'<tr><td style="padding:22px 24px 8px" align="center"><a href="{e(dash)}" style="display:inline-block;background:{C["acc"]};color:#fff;{FONT};font-weight:700;font-size:14px;text-decoration:none;padding:12px 22px;border-radius:6px">Open the live dashboard</a></td></tr>'
-    f'<tr><td style="padding:12px 24px 22px;{FONT};font-size:11px;line-height:1.5;color:{C["muted"]}">Sent by Claude (scheduled cloud task). Predictions and tickets are PAPER and scored automatically. A 53–58% chance means it is wrong almost half the time; size so a string of losses is survivable. Base rates are history, not promises. Futures are leveraged and can lose more than the margin posted. Research tool, not financial advice.</td></tr>')
+    f'<tr><td style="padding:26px 20px 0"><a href="{e(dash)}" style="{F};font-size:16px;font-weight:700;color:{ACC}">Open the live dashboard →</a>'
+    f'<div style="{F};font-size:13px;color:{MUTED};margin-top:4px">Forecasts for all 33 markets, the full track record and past reports. Engine {e(eng.get("version", "-"))} · {e(mode.title() or "Full")} run.</div></td></tr>'
+    f'<tr><td style="padding:18px 20px 24px;{F};font-size:12px;line-height:1.5;color:{MUTED}">Sent by Claude (scheduled cloud task). This is the output of a rules-based model, written up as a paper trade and scored automatically. It is research, not financial advice, and Claude is not a licensed advisor. Futures are leveraged and can lose more than the margin posted. A 53–58% chance means it is wrong almost half the time.</td></tr>')
 
-html_doc = (f'<!doctype html><html><body style="margin:0;padding:0;background:{C["bg"]}">'
-            f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:{C["bg"]}"><tr><td align="center" style="padding:16px 8px">'
-            f'<table role="presentation" width="640" cellpadding="0" cellspacing="0" style="width:100%;max-width:640px;background:{C["card"]};border-radius:8px;overflow:hidden">'
-            + "".join(parts) + '</table></td></tr></table></body></html>')
+html_doc = ('<table width="100%" cellpadding="0" cellspacing="0"><tr><td align="center" style="padding:8px 4px">'
+            '<table width="620" cellpadding="0" cellspacing="0" style="width:100%;max-width:620px;border:1px solid ' + RULE + ';border-radius:10px">'
+            + "".join(parts) + '</table></td></tr></table>')
 
 # ---------- plain text ----------
-L = [f"CLAUDE · MACRO FUTURES DESK — {session}", ""]
-if BP.get("name"):
-    L += [f"BEST PREDICTION ({BP.get('hold') or 10} sessions): {BP.get('name')} {'UP' if str(BP.get('dir')).upper() == 'LONG' else 'DOWN'} · chance {BP.get('prob')}% · grade {BP.get('grade')}",
-          f"  ref {BP.get('ref')}, stop {BP.get('stop')}, target {BP.get('target') or 'time exit'}, expected move {BP.get('exp_move')}, size {BP.get('size')} (risk {BP.get('risk_usd')})",
-          "  " + first_sentences(BP.get("why"), 3, 460)]
-    L += [f"  - {x}" for x in (BP.get("drivers") or [])[:4]]
-    if BP.get("invalidation"):
-        L.append(f"  Wrong if: {clip(BP.get('invalidation'), 200)}")
+L = [f"CLAUDE · MACRO FUTURES DESK · trade plan for {session}", ""]
+if stale:
+    L += ["OLDER DATA TONIGHT: " + sentences(D.get("data_note"), 1, 200) + " Check the price before acting.", ""]
+if TR.get("action") and BP.get("name"):
+    contract = TR.get("contract_override") if real(TR.get("contract_override")) else TR.get("contract")
+    L += [f"TONIGHT'S TRADE{' (paper)' if TR.get('paper') else ''}: {TR['action']} {BP.get('name')}  [{contract}]",
+          f"  ENTRY:      {TR.get('entry_when')} {TR.get('entry_rule')}",
+          f"  STOP LOSS:  {num(TR.get('stop'))} ({TR.get('stop_order', 'stop')} order)",
+          f"  EXIT:       {TR.get('exit_rule')}",
+          f"  SIZE:       {str(TR.get('qty')) + ' x ' + str(contract) if TR.get('qty') else 'paper only'} ({TR.get('product')})",
+          f"  RISK:       {money(TR.get('max_loss_usd'))} if the stop is hit",
+          f"  CHANCE:     {num(TR.get('chance'))}% · {TR.get('conviction')} conviction (grade {TR.get('grade')})"]
+    why = BP.get("why") if real(BP.get("why")) else V.get("summary")
+    if real(why):
+        L += ["", "WHY: " + sentences(why, 3, 480)]
+    if real(BP.get("invalidation")):
+        L.append("GET OUT EARLY IF: " + clip(BP.get("invalidation"), 300))
     if ALT:
-        L.append("  Runners-up: " + "; ".join(f"{a.get('name')} {a.get('dir')} {a.get('prob')}%" for a in ALT[:3]))
-    if REC.get("calls"):
-        L.append(f"  Track record: {REC.get('calls')} calls, {REC.get('closed')} closed, avg {REC.get('avgR')}R, direction right {REC.get('dir_right_pct')}%")
-    L.append("")
-L += [f"{stance}: {headline}", first_sentences(V.get("summary"), 3, 420), ""]
-if T:
-    L.append("TRADE TICKETS")
-    for t in T:
-        L.append(f"- {'BUY' if str(t.get('dir')).upper() == 'LONG' else 'SELL'} {t.get('instrument')} ({t.get('name')}): entry {t.get('entry')}, stop {t.get('stop')}, target {t.get('target1')}, size {t.get('size')}, P(win) {t.get('pwin')}%, conviction {t.get('conviction')}/100")
+        L += ["", "NEXT BEST: " + "; ".join(f"{a.get('name')} {'BUY' if a.get('dir') == 'LONG' else 'SELL'} {a.get('prob')}%" for a in ALT[:3])]
 else:
-    L.append("TRADE TICKETS: none today.")
+    L += [str(V.get("headline") or ""), sentences(V.get("summary"), 3, 420)]
+if REC.get("calls"):
+    L += ["", f"TRACK RECORD: {REC.get('calls')} trades logged, {REC.get('closed')} closed" + (f", {REC.get('win_pct')}% won, avg {REC.get('avgR')}R" if REC.get("closed") else "")]
 if MT.get("quadrant"):
-    pl = MT.get("pillars") or {}
-    L += ["", f"REGIME: {MT['quadrant']} (day {MT.get('ageSessions')})",
-          "  " + " | ".join(f"{k.title()} {(pl.get(k) or {}).get('score')}" for k in ["growth", "inflation", "policy", "liquidity", "risk"])]
-if W:
-    L += ["", "WATCHLIST"] + [f"- {w.get('name')} {w.get('dir')}: {w.get('trigger')} (base {w.get('base')})" for w in W[:6]]
-L += ["", "OPEN POSITIONS: " + ("none" if not P else "; ".join(f"{p.get('name')} {p.get('dir')} {p.get('R')}R" for p in P))]
+    L += ["", f"MACRO: {MT['quadrant']} (day {MT.get('ageSessions')})"]
 if hi:
-    L += ["", "KEY EVENTS"] + [f"- {x.get('day')} {x.get('time')}: {clip(x.get('what'), 70)}" for x in hi[:7]]
-L += ["", f"Dashboard: {dash}", "Research tool, not financial advice."]
+    L += ["", "EVENTS"] + [f"- {x.get('day')} {x.get('time')}: {clip(x.get('what'), 90)}" for x in hi[:6]]
+L += ["", f"Dashboard: {dash}", "Rules-based model output, paper trade. Research, not financial advice."]
 
-short_hl = headline.replace(";", ".").split(". ")[0].rstrip(".")
-sess = session.replace('Report for the ', '').replace(' session', '')
-if BP.get("name"):
-    subj = f"[Claude] Best prediction · {sess} · {BP.get('name')} {'UP' if str(BP.get('dir')).upper() == 'LONG' else 'DOWN'} ({BP.get('prob')}%, grade {BP.get('grade')}) — {clip(short_hl, 60)}"
+# ---------- subject ----------
+if TR.get("action") and BP.get("name"):
+    short_action = "BUY" if TR["action"].upper().startswith("BUY") else "SELL"
+    contract = TR.get("contract_override") if real(TR.get("contract_override")) else TR.get("contract")
+    subj = f"[Claude] {short_action} {str(BP.get('name')).split(' (')[0]} ({contract}) · stop {num(TR.get('stop'))} · {num(TR.get('chance'))}% {str(TR.get('conviction') or '').lower()} conviction · {session}"
 else:
-    subj = f"[Claude] Macro Desk · {sess} · {stance} — {clip(short_hl, 70)}"
+    subj = f"[Claude] Macro Desk · {session} — {clip(V.get('headline'), 70)}"
+if stale:
+    subj += " · older data"
+if D.get("subject_prefix"):
+    subj = subj.replace("[Claude] ", "[Claude] " + str(D["subject_prefix"]).strip() + " ", 1)
 open(os.path.join(out_dir, "subject.txt"), "w", encoding="utf-8").write(subj)
 open(os.path.join(out_dir, "email.html"), "w", encoding="utf-8").write(html_doc)
 open(os.path.join(out_dir, "email.txt"), "w", encoding="utf-8").write("\n".join(L))
