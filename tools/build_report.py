@@ -157,9 +157,18 @@ if pick:
 wk = (PR.get(pick["sym"]) or {}).get("weekend") if pick else None
 if wk and trade.get("entry_lo") is not None:
     last = wk[4]
-    where = "inside the entry window" if trade["entry_lo"] <= last <= trade["entry_hi"] else (("below" if last < trade["entry_lo"] else "above") + " the entry window: no entry unless the price comes back inside it")
     trade["weekend_last"] = last
-    trade["entry_rule"] += f" Weekend trading when the data was collected: last {num(last)} (range {num(wk[3])} to {num(wk[2])}), {where}."
+    lo_s, hi_s = num(trade["entry_lo"]), num(trade["entry_hi"])
+    verb = "Buy" if pick["dir"] == "LONG" else "Sell"
+    if trade["entry_lo"] <= last <= trade["entry_hi"]:
+        trade["entry_rule"] += f" Weekend trading so far: last {num(last)}, inside the window."
+    else:
+        side = "below" if last < trade["entry_lo"] else "above"
+        move = "climbs back" if side == "below" else "drops back"
+        trade["entry_when"] = f"Wait. {verb} only if the price {move} into {lo_s} to {hi_s}."
+        trade["entry_rule"] = (f"It already traded {side} that window over the weekend (last {num(last)}, Friday close {num(ref)}). "
+                               f"Chasing it would leave the stop too far away. If it never returns to the window before {dlabel(exit_d)}, there is no trade.")
+        trade["entry_status"] = "WAIT"
 
 alts = [{"name": b["name"], "dir": b["dir"], "prob": prob_of(b), "grade": b.get("grade"), "basis": b.get("basis")} for b in best if not pick or b["sym"] != pick["sym"]][:3]
 
