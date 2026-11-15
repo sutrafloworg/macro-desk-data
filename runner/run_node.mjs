@@ -140,7 +140,11 @@ try {
       if (i + 1 < rows.length) { const y = rows[i + 1].slice(); y[1] = rows[i][1]; y[2] = Math.max(y[2], rows[i][2]); y[3] = Math.min(y[3], rows[i][3]); rows[i + 1] = y; }
       else merged.weekend = rows[i];
     }
-    prices[r.sym] = { name: r.name, front: r.front, atr: r.atr, bars: merged.slice(-160), ...(merged.weekend ? { weekend: merged.weekend } : {}) };
+    // sessions still in progress (evening session, overnight, weekend) are not closes: keep them aside as the live price
+    let live = merged.weekend || null;
+    const done = ctx.MFD._t && ctx.MFD._t.lastDoneDate ? ctx.MFD._t.lastDoneDate(Date.now()) : null;
+    while (done && merged.length && merged[merged.length - 1][0] > done) live = merged.pop();
+    prices[r.sym] = { name: r.name, front: r.front, atr: r.atr, bars: merged.slice(-160), ...(live ? { live } : {}) };
   }
   const asof = o.forecast && o.forecast.asof || (o.table[0] && o.table[0].asof);
   const lean = { meta: o.meta, source: status.source, asof, best: o.best, forecast: o.forecast, signals: o.signals, watch: o.watch, macro: o.macro, regime: o.regime, curves: o.curves, calendar: o.calendar, news: o.news, setupBook: o.setupBook };
