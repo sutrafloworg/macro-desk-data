@@ -1,12 +1,15 @@
 name: collect-market-data
 # Runs the Macro Futures Desk engine in the cloud after the US futures close and commits the results to data/.
-# Several start times after the 5 PM ET futures close (GitHub often starts scheduled jobs late or drops them),
-# from 22:07 UTC to 00:37 UTC. A run is skipped when good data less than 100 minutes old already exists.
+# US futures sessions end at 5 PM ET and the data feed lags 10 minutes, so closes are final from 5:20 PM ET.
+# GitHub starts scheduled jobs late (sometimes by hours) or drops them, so there are many start times:
+# every 15 minutes from 5:22 PM ET to about midnight ET, then every 30 minutes around 4-8 AM ET (for the morning
+# fallback). The times are in UTC and cover both EST and EDT. tools/clock.py skips a run when this evening's data
+# (generated after the latest weekday 5:20 PM ET) is already in, so normally only the first successful slot works.
 on:
   schedule:
-    - cron: "7,22,37,52 22 * * 0-5"
-    - cron: "7,22,37,52 23 * * 0-5"
-    - cron: "7,37 0 * * 1-6"
+    - cron: "7,22,37,52 21-23 * * 1-5"
+    - cron: "7,22,37,52 0-4 * * 2-6"
+    - cron: "7,37 8-12 * * 2-6"
   workflow_dispatch:
   push:
     branches: [main]
@@ -22,20 +25,10 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
-      - name: Skip if fresh data already exists
+      - name: Skip if this evening's closes are already in
         id: fresh
         if: github.event_name == 'schedule'
-        run: |
-          python3 - <<'EOF' >> "$GITHUB_OUTPUT"
-          import json, datetime
-          try:
-              s = json.load(open("data/status.json"))
-              t = datetime.datetime.fromisoformat(s["generated_utc"].replace("Z", "+00:00"))
-              age = (datetime.datetime.now(datetime.timezone.utc) - t).total_seconds() / 60
-              print("skip=" + ("true" if s.get("ok") and age < 100 else "false"))
-          except Exception:
-              print("skip=false")
-          EOF
+        run: python3 tools/clock.py --gate data/status.json >> "$GITHUB_OUTPUT"
       - uses: actions/setup-node@v4
         if: steps.fresh.outputs.skip != 'true'
         with:
