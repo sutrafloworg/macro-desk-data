@@ -6,7 +6,7 @@
   "max_total_open_risk_pct": 3.0,
   "timezone": "America/New_York",
   "artifact_url": "https://claude.ai/artifact/4tCfHkU55uKquwJ7vNvD4N",
-  "engine_version": "2.0.1",
+  "engine_version": "2.0.2",
   "notes": "Edit equity_usd to your futures account size. The daily run sizes every call from these numbers.",
   "live_mode": false
 }
