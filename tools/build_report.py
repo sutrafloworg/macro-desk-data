@@ -154,19 +154,20 @@ if pick:
     }
 
 # weekend trading (crypto futures trade through the weekend): say where the price is against the entry window
-wk = (PR.get(pick["sym"]) or {}).get("weekend") if pick else None
+_pp = (PR.get(pick["sym"]) or {}) if pick else {}
+wk = _pp.get("live") or _pp.get("weekend")
 if wk and trade.get("entry_lo") is not None:
     last = wk[4]
     trade["weekend_last"] = last
     lo_s, hi_s = num(trade["entry_lo"]), num(trade["entry_hi"])
     verb = "Buy" if pick["dir"] == "LONG" else "Sell"
     if trade["entry_lo"] <= last <= trade["entry_hi"]:
-        trade["entry_rule"] += f" Weekend trading so far: last {num(last)}, inside the window."
+        trade["entry_rule"] += f" Trading since that close: last {num(last)}, inside the window."
     else:
         side = "below" if last < trade["entry_lo"] else "above"
         move = "climbs back" if side == "below" else "drops back"
         trade["entry_when"] = f"Wait. {verb} only if the price {move} into {lo_s} to {hi_s}."
-        trade["entry_rule"] = (f"It already traded {side} that window over the weekend (last {num(last)}, Friday close {num(ref)}). "
+        trade["entry_rule"] = (f"It already traded {side} that window since the {dlabel(date.fromisoformat(asof))} close (last {num(last)}, close {num(ref)}). "
                                f"Chasing it would leave the stop too far away. If it never returns to the window before {dlabel(exit_d)}, there is no trade.")
         trade["entry_status"] = "WAIT"
 
