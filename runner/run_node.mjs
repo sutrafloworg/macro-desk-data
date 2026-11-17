@@ -146,7 +146,12 @@ try {
     while (done && merged.length && merged[merged.length - 1][0] > done) live = merged.pop();
     prices[r.sym] = { name: r.name, front: r.front, atr: r.atr, bars: merged.slice(-160), ...(live ? { live } : {}) };
   }
-  const asof = o.forecast && o.forecast.asof || (o.table[0] && o.table[0].asof);
+  // asof = the close date most markets share (ties -> later date). Using only the top forecast market's date
+  // let one lagging market (e.g. CME crypto missing a Monday bar) hold the whole data set at the previous close.
+  const lastDates = {};
+  for (const p of Object.values(prices)) { const d = p.bars.length ? p.bars[p.bars.length - 1][0] : null; if (d) lastDates[d] = (lastDates[d] || 0) + 1; }
+  const common = Object.entries(lastDates).sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? 1 : -1))[0];
+  const asof = (common && common[0]) || (o.forecast && o.forecast.asof) || (o.table[0] && o.table[0].asof);
   const lean = { meta: o.meta, source: status.source, asof, best: o.best, forecast: o.forecast, signals: o.signals, watch: o.watch, macro: o.macro, regime: o.regime, curves: o.curves, calendar: o.calendar, news: o.news, setupBook: o.setupBook };
   writeJSON("latest.json", lean);
   writeJSON("desk.json", desk);
